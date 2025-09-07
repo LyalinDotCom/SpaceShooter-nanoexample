@@ -99,3 +99,6 @@ typings/
 # Vite build output
 dist
 public
+
+# Firebase
+.firebase/hosting.*.cache
