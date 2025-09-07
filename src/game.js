@@ -82,11 +82,6 @@ class GameScene extends Phaser.Scene {
   }
 
   create () {
-    this.makeColorTransparent('player', { r: 255, g: 255, b: 255 })
-    for (let i = 1; i <= 20; i++) {
-      this.makeColorTransparent(`enemy${i}`, { r: 255, g: 255, b: 255 })
-    }
-
     // Create a scrolling background
     this.background = this.add.tileSprite(400, 300, 800, 600, 'background1')
 
@@ -236,41 +231,6 @@ class GameScene extends Phaser.Scene {
         this.cameras.main.flash(250, 255, 0, 0) // Flash red
       }
     })
-  }
-
-  makeColorTransparent (textureKey, color, tolerance = 0.1) {
-    const texture = this.textures.get(textureKey)
-    if (!texture || texture.key === '__MISSING') {
-      return
-    }
-    const sourceImage = texture.getSourceImage()
-    const canvas = Phaser.Display.Canvas.CanvasPool.create(this, sourceImage.width, sourceImage.height)
-    const ctx = canvas.getContext('2d')
-
-    ctx.drawImage(sourceImage, 0, 0)
-
-    const imageData = ctx.getImageData(0, 0, sourceImage.width, sourceImage.height)
-    const data = imageData.data
-
-    for (let i = 0; i < data.length; i += 4) {
-      const r = data[i]
-      const g = data[i + 1]
-      const b = data[i + 2]
-
-      const distance = Math.sqrt(
-        Math.pow(r - color.r, 2) +
-        Math.pow(g - color.g, 2) +
-        Math.pow(b - color.b, 2)
-      )
-
-      if (distance < 255 * tolerance) {
-        data[i + 3] = 0
-      }
-    }
-
-    ctx.putImageData(imageData, 0, 0)
-    this.textures.remove(textureKey)
-    this.textures.addCanvas(textureKey, canvas)
   }
 }
 
