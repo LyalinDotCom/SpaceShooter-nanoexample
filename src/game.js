@@ -63,6 +63,7 @@ class GameScene extends Phaser.Scene {
     this.wave = 1
     this.waveText = null
     this.gameOver = false
+    this.isSpawning = false
   }
 
   preload () {
@@ -166,6 +167,19 @@ class GameScene extends Phaser.Scene {
       this.waveText.setText('Wave: ' + this.wave)
       this.startWave()
     }
+
+    // Destroy bullets that are off-screen
+    this.bullets.children.each(bullet => {
+      if (bullet.active && bullet.y < 0) {
+        bullet.destroy()
+      }
+    })
+
+    this.enemyBullets.children.each(bullet => {
+      if (bullet.active && bullet.y > 600) {
+        bullet.destroy()
+      }
+    })
   }
 
   fireBullet () {
@@ -198,8 +212,9 @@ class GameScene extends Phaser.Scene {
   }
 
   startWave () {
-    if (this.gameOver) return
+    if (this.gameOver || this.isSpawning) return
 
+    this.isSpawning = true
     const enemiesThisWave = Math.min(3 + this.wave, 15)
 
     this.time.addEvent({
@@ -214,11 +229,16 @@ class GameScene extends Phaser.Scene {
         enemy.body.setCircle(250)
         enemy.body.velocity.y = Phaser.Math.Between(50, 150)
         enemy.body.velocity.x = Phaser.Math.Between(-50, 50)
+      },
+      onComplete: () => {
+        this.isSpawning = false
+        // Visual debug cue
+        this.cameras.main.flash(250, 255, 0, 0) // Flash red
       }
     })
   }
 
-  makeColorTransparent (textureKey, color) {
+  makeColorTransparent (textureKey, color, tolerance = 0.1) {
     const texture = this.textures.get(textureKey)
     if (!texture || texture.key === '__MISSING') {
       return
@@ -237,7 +257,13 @@ class GameScene extends Phaser.Scene {
       const g = data[i + 1]
       const b = data[i + 2]
 
-      if (r === color.r && g === color.g && b === color.b) {
+      const distance = Math.sqrt(
+        Math.pow(r - color.r, 2) +
+        Math.pow(g - color.g, 2) +
+        Math.pow(b - color.b, 2)
+      )
+
+      if (distance < 255 * tolerance) {
         data[i + 3] = 0
       }
     }
@@ -259,14 +285,6 @@ class Bullet extends Phaser.Physics.Arcade.Sprite {
     this.setVisible(true)
     this.body.velocity.x = vx
     this.body.velocity.y = vy
-  }
-
-  preUpdate (time, delta) {
-    super.preUpdate(time, delta)
-    if (this.y <= 0 || this.y >= 600) {
-      this.setActive(false)
-      this.setVisible(false)
-    }
   }
 }
 
