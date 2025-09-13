@@ -64,6 +64,8 @@ class GameScene extends Phaser.Scene {
     this.waveText = null
     this.gameOver = false
     this.isSpawning = false
+    this.gameOverText = null
+    this.restartButton = null
   }
 
   preload () {
@@ -196,14 +198,99 @@ class GameScene extends Phaser.Scene {
     this.physics.pause()
     this.player.setTint(0xff0000)
     this.gameOver = true
-    this.add.text(400, 300, 'Game Over', { fontSize: '64px', fill: '#FFF' }).setOrigin(0.5)
+
+    // Store references to game over UI elements
+    this.gameOverText = this.add.text(400, 250, 'Game Over', { fontSize: '64px', fill: '#FFF' }).setOrigin(0.5)
+
+    // Add restart button
+    this.restartButton = this.add.text(400, 350, 'RESTART', {
+      fontSize: '40px',
+      fill: '#FFF',
+      backgroundColor: '#333',
+      padding: { x: 20, y: 10 }
+    }).setOrigin(0.5)
+
+    this.restartButton.setInteractive({ useHandCursor: true })
+    this.restartButton.on('pointerover', () => {
+      this.restartButton.setStyle({ backgroundColor: '#555' })
+    })
+    this.restartButton.on('pointerout', () => {
+      this.restartButton.setStyle({ backgroundColor: '#333' })
+    })
+    this.restartButton.on('pointerdown', () => {
+      this.restartGame()
+    })
   }
 
   enemyHit (bullet, enemy) {
     bullet.destroy()
+
+    // Create explosion effect
+    const explosion = this.add.graphics()
+    explosion.x = enemy.x
+    explosion.y = enemy.y
+
+    // Draw explosion circles
+    explosion.fillStyle(0xffff00, 1)
+    explosion.fillCircle(0, 0, 10)
+    explosion.fillStyle(0xff8800, 0.8)
+    explosion.fillCircle(0, 0, 20)
+    explosion.fillStyle(0xff0000, 0.5)
+    explosion.fillCircle(0, 0, 30)
+
+    // Animate explosion
+    this.tweens.add({
+      targets: explosion,
+      scaleX: 2,
+      scaleY: 2,
+      alpha: 0,
+      duration: 300,
+      onComplete: () => {
+        explosion.destroy()
+      }
+    })
+
     enemy.destroy()
     this.score += 10
     this.scoreText.setText('Score: ' + this.score)
+  }
+
+  restartGame () {
+    // Clear game over UI elements
+    if (this.gameOverText) {
+      this.gameOverText.destroy()
+      this.gameOverText = null
+    }
+    if (this.restartButton) {
+      this.restartButton.destroy()
+      this.restartButton = null
+    }
+
+    // Reset game state
+    this.score = 0
+    this.wave = 1
+    this.gameOver = false
+    this.isSpawning = false
+
+    // Clear all existing game objects
+    this.enemies.clear(true, true)
+    this.bullets.clear(true, true)
+    this.enemyBullets.clear(true, true)
+
+    // Reset player
+    this.player.clearTint()
+    this.player.setPosition(400, 550)
+    this.player.setActive(true)
+
+    // Update UI texts
+    this.scoreText.setText('Score: 0')
+    this.waveText.setText('Wave: 1')
+
+    // Resume physics
+    this.physics.resume()
+
+    // Start first wave again
+    this.startWave()
   }
 
   startWave () {
@@ -212,23 +299,26 @@ class GameScene extends Phaser.Scene {
     this.isSpawning = true
     const enemiesThisWave = Math.min(3 + this.wave, 15)
 
+    let enemiesCreated = 0
     this.time.addEvent({
       delay: 500,
       repeat: enemiesThisWave - 1,
       callback: () => {
-        const x = Phaser.Math.Between(50, 750)
-        const y = Phaser.Math.Between(-100, -50)
-        const enemyKey = `enemy${Phaser.Math.Between(1, 20)}`
-        const enemy = this.enemies.create(x, y, enemyKey)
-        enemy.setScale(0.05)
-        enemy.body.setCircle(250)
-        enemy.body.velocity.y = Phaser.Math.Between(50, 150)
-        enemy.body.velocity.x = Phaser.Math.Between(-50, 50)
+        if (!this.gameOver) {
+          const x = Phaser.Math.Between(50, 750)
+          const y = Phaser.Math.Between(-100, -50)
+          const enemyKey = `enemy${Phaser.Math.Between(1, 20)}`
+          const enemy = this.enemies.create(x, y, enemyKey)
+          enemy.setScale(0.05)
+          enemy.body.setCircle(250)
+          enemy.body.velocity.y = Phaser.Math.Between(50, 150)
+          enemy.body.velocity.x = Phaser.Math.Between(-50, 50)
+          enemiesCreated++
+        }
       },
       onComplete: () => {
         this.isSpawning = false
-        // Visual debug cue
-        this.cameras.main.flash(250, 255, 0, 0) // Flash red
+        console.log(`Wave ${this.wave} spawned ${enemiesCreated} enemies`)
       }
     })
   }
