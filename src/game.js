@@ -66,6 +66,8 @@ class GameScene extends Phaser.Scene {
     this.isSpawning = false
     this.gameOverText = null
     this.restartButton = null
+    this.enemyFireTimer = 0
+    this.debugText = null
   }
 
   preload () {
@@ -119,6 +121,7 @@ class GameScene extends Phaser.Scene {
     // Score and Wave Text
     this.scoreText = this.add.text(16, 16, 'Score: 0', { fontSize: '32px', fill: '#FFF' })
     this.waveText = this.add.text(550, 16, 'Wave: 1', { fontSize: '32px', fill: '#FFF' })
+    this.debugText = this.add.text(16, 560, 'Enemies: 0', { fontSize: '16px', fill: '#FFF' })
 
     // Start first wave
     this.startWave()
@@ -142,6 +145,7 @@ class GameScene extends Phaser.Scene {
     }
 
     // Enemy movement and firing
+    this.enemyFireTimer++
     this.enemies.children.each(enemy => {
       if (enemy.active) {
         if (enemy.y > 300) {
@@ -152,17 +156,30 @@ class GameScene extends Phaser.Scene {
           enemy.body.velocity.x *= -1
         }
 
-        if (Phaser.Math.Between(0, 100) > 98) {
+        // Reduced firing rate - fire every 2-3 seconds (120-180 frames at 60fps)
+        if (this.enemyFireTimer > 120 && Phaser.Math.Between(0, 100) > 98) {
           this.fireEnemyBullet(enemy.x, enemy.y)
+          if (Phaser.Math.Between(0, 100) > 50) {
+            this.enemyFireTimer = 0 // Reset timer after some enemies fire
+          }
         }
       }
     })
 
-    // Check for next wave
-    if (this.enemies.countActive(true) === 0 && !this.isSpawning) {
+    // Update debug info
+    const activeEnemies = this.enemies.countActive(true)
+    this.debugText.setText(`Enemies: ${activeEnemies} | Spawning: ${this.isSpawning}`)
+
+    // Check for next wave with better logic
+    if (activeEnemies === 0 && !this.isSpawning && !this.gameOver) {
+      this.isSpawning = true // Set immediately to prevent multiple triggers
       this.wave++
       this.waveText.setText('Wave: ' + this.wave)
-      this.startWave()
+      console.log(`Preparing wave ${this.wave}`)
+      this.time.delayedCall(1000, () => {
+        // Don't reset isSpawning here, let startWave handle it
+        this.startWave()
+      })
     }
 
     // Destroy bullets that are off-screen
@@ -271,6 +288,7 @@ class GameScene extends Phaser.Scene {
     this.wave = 1
     this.gameOver = false
     this.isSpawning = false
+    this.enemyFireTimer = 0
 
     // Clear all existing game objects
     this.enemies.clear(true, true)
@@ -294,14 +312,21 @@ class GameScene extends Phaser.Scene {
   }
 
   startWave () {
-    if (this.gameOver || this.isSpawning) return
+    if (this.gameOver) {
+      console.log('Cannot start wave - game over')
+      return
+    }
 
-    this.isSpawning = true
-    const enemiesThisWave = Math.min(3 + this.wave, 15)
+    // Better wave progression: starts with 3-5, then adds 1-2 per wave
+    const baseEnemies = Phaser.Math.Between(3, 5)
+    const additionalEnemies = Math.floor((this.wave - 1) * 1.5)
+    const enemiesThisWave = Math.min(baseEnemies + additionalEnemies, 20)
+
+    console.log(`Wave ${this.wave} starting with ${enemiesThisWave} enemies`)
 
     let enemiesCreated = 0
-    this.time.addEvent({
-      delay: 500,
+    const spawnTimer = this.time.addEvent({
+      delay: 600,
       repeat: enemiesThisWave - 1,
       callback: () => {
         if (!this.gameOver) {
@@ -310,17 +335,24 @@ class GameScene extends Phaser.Scene {
           const enemyKey = `enemy${Phaser.Math.Between(1, 20)}`
           const enemy = this.enemies.create(x, y, enemyKey)
           enemy.setScale(0.05)
-          enemy.body.setCircle(250)
+          // Make hitbox 2x bigger (was 250, now 500)
+          enemy.body.setCircle(500)
           enemy.body.velocity.y = Phaser.Math.Between(50, 150)
           enemy.body.velocity.x = Phaser.Math.Between(-50, 50)
           enemiesCreated++
+          console.log(`Enemy ${enemiesCreated} created`)
         }
       },
       onComplete: () => {
         this.isSpawning = false
-        console.log(`Wave ${this.wave} spawned ${enemiesCreated} enemies`)
+        console.log(`Wave ${this.wave} complete - spawned ${enemiesCreated} enemies`)
       }
     })
+
+    // If timer creation failed, reset spawning flag
+    if (!spawnTimer) {
+      this.isSpawning = false
+    }
   }
 }
 
