@@ -57,6 +57,7 @@ class GameScene extends Phaser.Scene {
     this.bullets = null
     this.enemies = null
     this.enemyBullets = null
+    this.powerUps = null
     this.background = null
     this.score = 0
     this.scoreText = null
@@ -64,10 +65,24 @@ class GameScene extends Phaser.Scene {
     this.waveText = null
     this.gameOver = false
     this.isSpawning = false
+    this.bgKeys = ['background1', 'background2', 'background3', 'background4', 'background5']
     this.gameOverText = null
     this.restartButton = null
     this.enemyFireTimer = 0
     this.debugText = null
+    this.debugEnabled = false
+
+    // Shooting control
+    this.shootCooldown = 200
+    this.nextShotTime = 0
+    this.autoFireUntil = 0
+
+    // Web Audio
+    this.audioCtx = null
+    // Timers/watchdogs
+    this.nextWaveTimer = null
+    this.spawnWatchStart = null
+    this.spawnTimerEvent = null
   }
 
   preload () {
@@ -89,19 +104,43 @@ class GameScene extends Phaser.Scene {
     // Create a scrolling background
     this.background = this.add.tileSprite(400, 300, 800, 600, 'background1')
 
+    // Ensure procedural textures exist before creating groups
+    if (!this.textures.exists('bullet')) {
+      const g = this.add.graphics()
+      g.fillStyle(0xffffff, 1)
+      g.fillRect(0, 0, 2, 10)
+      g.generateTexture('bullet', 2, 10)
+      g.destroy()
+    }
+    if (!this.textures.exists('powerup')) {
+      const g2 = this.add.graphics()
+      g2.fillStyle(0x00ff66, 1)
+      g2.fillRoundedRect(0, 0, 12, 12, 3)
+      g2.generateTexture('powerup', 12, 12)
+      g2.destroy()
+    }
+
     // Player
     this.player = this.physics.add.sprite(400, 550, 'player').setScale(0.05)
     this.player.setCollideWorldBounds(true)
-    this.player.body.setCircle(250)
+    // Fair hitbox sized to displayed sprite
+    this.player.body.setSize(this.player.displayWidth * 0.8, this.player.displayHeight * 0.8, true)
 
     // Cursors
     this.cursors = this.input.keyboard.createCursorKeys()
-    this.input.keyboard.on('keydown-SPACE', this.fireBullet, this)
+    this.input.keyboard.on('keydown-SPACE', () => {
+      this.tryFireBullet()
+    })
+    // Toggle debug overlay
+    this.input.keyboard.on('keydown-D', () => {
+      this.debugEnabled = !this.debugEnabled
+      this.debugText.setVisible(this.debugEnabled)
+    })
 
     // Bullets
     this.bullets = this.physics.add.group({
-      classType: Bullet,
-      runChildUpdate: true
+      defaultKey: 'bullet',
+      maxSize: 200
     })
 
     // Enemies
@@ -109,19 +148,25 @@ class GameScene extends Phaser.Scene {
 
     // Enemy Bullets
     this.enemyBullets = this.physics.add.group({
-      classType: Bullet,
-      runChildUpdate: true
+      defaultKey: 'bullet',
+      maxSize: 200
     })
+
+    // Power-Ups
+    this.powerUps = this.physics.add.group()
 
     // Collisions
     this.physics.add.collider(this.player, this.enemies, this.playerHit, null, this)
     this.physics.add.collider(this.player, this.enemyBullets, this.playerHit, null, this)
-    this.physics.add.collider(this.bullets, this.enemies, this.enemyHit, null, this)
+    // Use overlap for bullet hits to avoid separation issues
+    this.physics.add.overlap(this.bullets, this.enemies, this.enemyHit, null, this)
+    this.physics.add.overlap(this.player, this.powerUps, this.collectPowerUp, null, this)
 
     // Score and Wave Text
     this.scoreText = this.add.text(16, 16, 'Score: 0', { fontSize: '32px', fill: '#FFF' })
     this.waveText = this.add.text(550, 16, 'Wave: 1', { fontSize: '32px', fill: '#FFF' })
     this.debugText = this.add.text(16, 560, 'Enemies: 0', { fontSize: '16px', fill: '#FFF' })
+    this.debugText.setVisible(this.debugEnabled)
 
     // Start first wave
     this.startWave()
@@ -135,13 +180,18 @@ class GameScene extends Phaser.Scene {
     // Scroll background
     this.background.tilePositionY -= 2
 
-    // Player movement
-    if (this.cursors.left.isDown) {
-      this.player.setVelocityX(-300)
-    } else if (this.cursors.right.isDown) {
-      this.player.setVelocityX(300)
-    } else {
-      this.player.setVelocityX(0)
+    // Player movement (adds vertical)
+    let vx = 0
+    let vy = 0
+    if (this.cursors.left.isDown) vx = -300
+    else if (this.cursors.right.isDown) vx = 300
+    if (this.cursors.up?.isDown) vy = -300
+    else if (this.cursors.down?.isDown) vy = 300
+    this.player.setVelocity(vx, vy)
+
+    // Hold-to-fire and auto-fire
+    if (this.cursors.space?.isDown || this.time.now < this.autoFireUntil) {
+      this.tryFireBullet()
     }
 
     // Enemy movement and firing
@@ -152,8 +202,17 @@ class GameScene extends Phaser.Scene {
           enemy.body.velocity.y = 0
         }
 
-        if (enemy.x < 50 || enemy.x > 750) {
-          enemy.body.velocity.x *= -1
+        // Keep enemies moving horizontally and bounce off walls without sticking
+        if (enemy.x <= 50) {
+          enemy.x = 50
+          const speed = Math.max(Math.abs(enemy.body.velocity.x), 60)
+          enemy.body.velocity.x = speed
+        } else if (enemy.x >= 750) {
+          enemy.x = 750
+          const speed = Math.max(Math.abs(enemy.body.velocity.x), 60)
+          enemy.body.velocity.x = -speed
+        } else if (Math.abs(enemy.body.velocity.x) < 20) {
+          enemy.body.velocity.x = Phaser.Math.Between(40, 80) * (Phaser.Math.Between(0, 1) ? 1 : -1)
         }
 
         // Reduced firing rate - fire every 2-3 seconds (120-180 frames at 60fps)
@@ -168,45 +227,90 @@ class GameScene extends Phaser.Scene {
 
     // Update debug info
     const activeEnemies = this.enemies.countActive(true)
-    this.debugText.setText(`Enemies: ${activeEnemies} | Spawning: ${this.isSpawning}`)
+    if (this.debugEnabled) {
+      this.debugText.setText(`Enemies: ${activeEnemies} | Spawning: ${this.isSpawning}`)
+    }
 
     // Check for next wave with better logic
     if (activeEnemies === 0 && !this.isSpawning && !this.gameOver) {
-      this.isSpawning = true // Set immediately to prevent multiple triggers
+      // Prepare and lock spawning for next wave
+      this.isSpawning = true
       this.wave++
       this.waveText.setText('Wave: ' + this.wave)
       console.log(`Preparing wave ${this.wave}`)
-      this.time.delayedCall(1000, () => {
-        // Don't reset isSpawning here, let startWave handle it
+      if (this.nextWaveTimer) this.nextWaveTimer.remove(false)
+      this.nextWaveTimer = this.time.delayedCall(1000, () => {
         this.startWave()
       })
     }
 
+    // Spawn watchdog: if flagged spawning but no enemies appear in time, restart the wave
+    if (this.isSpawning && activeEnemies === 0 && !this.gameOver) {
+      if (this.spawnWatchStart == null) this.spawnWatchStart = this.time.now
+      if (this.time.now - this.spawnWatchStart > 2500) {
+        console.warn('Spawn watchdog restarting wave')
+        this.isSpawning = false
+        this.spawnWatchStart = null
+        this.startWave()
+      }
+    } else {
+      this.spawnWatchStart = null
+    }
+
     // Destroy bullets that are off-screen
     this.bullets.children.each(bullet => {
-      if (bullet.active && bullet.y < 0) {
-        bullet.destroy()
+      if (bullet.active && bullet.y < -20) {
+        this.bullets.killAndHide(bullet)
+        if (bullet.body) bullet.body.enable = false
       }
     })
 
     this.enemyBullets.children.each(bullet => {
-      if (bullet.active && bullet.y > 600) {
-        bullet.destroy()
+      if (bullet.active && bullet.y > 620) {
+        this.enemyBullets.killAndHide(bullet)
+        if (bullet.body) bullet.body.enable = false
       }
     })
   }
 
-  fireBullet () {
-    const bullet = this.bullets.get()
-    if (bullet) {
-      bullet.fire(this.player.x, this.player.y - 20, 0, -500)
+  tryFireBullet () {
+    if (this.time.now < this.nextShotTime) return
+    const x = this.player.x
+    const y = this.player.y - this.player.displayHeight * 0.6
+    const bullet = this.bullets.get(x, y, 'bullet')
+    if (!bullet) return
+    bullet.setActive(true)
+    bullet.setVisible(true)
+    if (bullet.body) {
+      bullet.body.enable = true
+      bullet.body.reset(x, y)
+      bullet.body.setAllowGravity(false)
+      bullet.body.setVelocity(0, -520)
+      if (bullet.body.setSize) bullet.body.setSize(10, 26, true)
+    } else {
+      bullet.setPosition(x, y)
+      bullet.setVelocity(0, -500)
     }
+    this.nextShotTime = this.time.now + this.shootCooldown
+    this.playBeep(700, 0.05, 'square', 0.03)
   }
 
   fireEnemyBullet (x, y) {
-    const bullet = this.enemyBullets.get()
-    if (bullet) {
-      bullet.fire(x, y + 20, 0, 200)
+    const bx = x
+    const by = y + 20
+    const bullet = this.enemyBullets.get(bx, by, 'bullet')
+    if (!bullet) return
+    bullet.setActive(true)
+    bullet.setVisible(true)
+    if (bullet.body) {
+      bullet.body.enable = true
+      bullet.body.reset(bx, by)
+      bullet.body.setAllowGravity(false)
+      bullet.body.setVelocity(0, 200)
+      if (bullet.body.setSize) bullet.body.setSize(10, 26, true)
+    } else {
+      bullet.setPosition(bx, by)
+      bullet.setVelocity(0, 200)
     }
   }
 
@@ -215,6 +319,7 @@ class GameScene extends Phaser.Scene {
     this.physics.pause()
     this.player.setTint(0xff0000)
     this.gameOver = true
+    this.playBeep(200, 0.2, 'sawtooth', 0.05)
 
     // Store references to game over UI elements
     this.gameOverText = this.add.text(400, 250, 'Game Over', { fontSize: '64px', fill: '#FFF' }).setOrigin(0.5)
@@ -240,7 +345,10 @@ class GameScene extends Phaser.Scene {
   }
 
   enemyHit (bullet, enemy) {
-    bullet.destroy()
+    if (bullet?.active) {
+      this.bullets.killAndHide(bullet)
+      if (bullet.body) bullet.body.enable = false
+    }
 
     // Create explosion effect
     const explosion = this.add.graphics()
@@ -270,6 +378,10 @@ class GameScene extends Phaser.Scene {
     enemy.destroy()
     this.score += 10
     this.scoreText.setText('Score: ' + this.score)
+
+    // Power-up drop disabled for now
+
+    this.playBeep(320, 0.08, 'triangle', 0.04)
   }
 
   restartGame () {
@@ -289,11 +401,18 @@ class GameScene extends Phaser.Scene {
     this.gameOver = false
     this.isSpawning = false
     this.enemyFireTimer = 0
+    this.nextShotTime = 0
+    this.shootCooldown = 200
+    this.autoFireUntil = 0
+    if (this.nextWaveTimer) { this.nextWaveTimer.remove(false); this.nextWaveTimer = null }
+    if (this.spawnTimerEvent) { this.spawnTimerEvent.remove(false); this.spawnTimerEvent = null }
+    this.spawnWatchStart = null
 
     // Clear all existing game objects
     this.enemies.clear(true, true)
     this.bullets.clear(true, true)
     this.enemyBullets.clear(true, true)
+    this.powerUps.clear(true, true)
 
     // Reset player
     this.player.clearTint()
@@ -316,6 +435,10 @@ class GameScene extends Phaser.Scene {
       console.log('Cannot start wave - game over')
       return
     }
+    // Mark spawning and rotate background
+    this.isSpawning = true
+    const bgIndex = (this.wave - 1) % this.bgKeys.length
+    this.background.setTexture(this.bgKeys[bgIndex])
 
     // Better wave progression: starts with 3-5, then adds 1-2 per wave
     const baseEnemies = Phaser.Math.Between(3, 5)
@@ -323,50 +446,60 @@ class GameScene extends Phaser.Scene {
     const enemiesThisWave = Math.min(baseEnemies + additionalEnemies, 20)
 
     console.log(`Wave ${this.wave} starting with ${enemiesThisWave} enemies`)
-
     let enemiesCreated = 0
-    const spawnTimer = this.time.addEvent({
-      delay: 600,
-      repeat: enemiesThisWave - 1,
-      callback: () => {
-        if (!this.gameOver) {
-          const x = Phaser.Math.Between(50, 750)
-          const y = Phaser.Math.Between(-100, -50)
-          const enemyKey = `enemy${Phaser.Math.Between(1, 20)}`
-          const enemy = this.enemies.create(x, y, enemyKey)
-          enemy.setScale(0.05)
-          // Make hitbox 2x bigger (was 250, now 500)
-          enemy.body.setCircle(500)
-          enemy.body.velocity.y = Phaser.Math.Between(50, 150)
-          enemy.body.velocity.x = Phaser.Math.Between(-50, 50)
-          enemiesCreated++
-          console.log(`Enemy ${enemiesCreated} created`)
-        }
-      },
-      onComplete: () => {
-        this.isSpawning = false
-        console.log(`Wave ${this.wave} complete - spawned ${enemiesCreated} enemies`)
+
+    // Occasionally spawn a simple formation
+    const useFormation = this.wave % 3 === 0
+    if (useFormation) {
+      const cols = Math.min(8, enemiesThisWave)
+      const startX = 80
+      const endX = 720
+      const step = (endX - startX) / (cols - 1)
+      for (let i = 0; i < enemiesThisWave; i++) {
+        const col = i % cols
+        const x = startX + col * step
+        const y = -80 - Math.floor(i / cols) * 50
+        const enemyKey = `enemy${Phaser.Math.Between(1, 20)}`
+        const enemy = this.enemies.create(x, y, enemyKey)
+        enemy.setScale(0.05)
+        // Reasonable hitbox matching display size
+        enemy.body.setSize(enemy.displayWidth * 1.2, enemy.displayHeight * 1.2, true)
+        enemy.body.velocity.y = Phaser.Math.Between(70, 120)
+        const hv = Phaser.Math.Between(40, 80) * (Phaser.Math.Between(0, 1) ? 1 : -1)
+        enemy.body.velocity.x = hv
+        enemiesCreated++
       }
-    })
-
-    // If timer creation failed, reset spawning flag
-    if (!spawnTimer) {
       this.isSpawning = false
+      console.log(`Wave ${this.wave} formation spawned ${enemiesCreated} enemies`)
+    } else {
+      this.spawnTimerEvent = this.time.addEvent({
+        delay: 600,
+        repeat: enemiesThisWave - 1,
+        callback: () => {
+          if (!this.gameOver) {
+            const x = Phaser.Math.Between(50, 750)
+            const y = Phaser.Math.Between(-100, -50)
+            const enemyKey = `enemy${Phaser.Math.Between(1, 20)}`
+            const enemy = this.enemies.create(x, y, enemyKey)
+            enemy.setScale(0.05)
+            enemy.body.setSize(enemy.displayWidth * 1.2, enemy.displayHeight * 1.2, true)
+            enemy.body.velocity.y = Phaser.Math.Between(50, 150)
+            const hv = Phaser.Math.Between(40, 80) * (Phaser.Math.Between(0, 1) ? 1 : -1)
+            enemy.body.velocity.x = hv
+            enemiesCreated++
+            // console.log(`Enemy ${enemiesCreated} created`)
+          }
+        },
+        onComplete: () => {
+          this.isSpawning = false
+          this.spawnTimerEvent = null
+          console.log(`Wave ${this.wave} complete - spawned ${enemiesCreated} enemies`)
+        }
+      })
+      if (!this.spawnTimerEvent) {
+        this.isSpawning = false
+      }
     }
-  }
-}
-
-class Bullet extends Phaser.Physics.Arcade.Sprite {
-  constructor (scene, x, y) {
-    super(scene, x, y, 'bullet')
-  }
-
-  fire (x, y, vx, vy) {
-    this.body.reset(x, y)
-    this.setActive(true)
-    this.setVisible(true)
-    this.body.velocity.x = vx
-    this.body.velocity.y = vy
   }
 }
 
@@ -385,16 +518,44 @@ const config = {
   scene: GameScene
 }
 
-// Create a simple white texture for the bullets
-function createBulletTexture (game) {
-  const graphics = game.scene.getScene('GameScene').add.graphics()
-  graphics.fillStyle(0xffffff, 1)
-  graphics.fillRect(0, 0, 2, 10)
-  graphics.generateTexture('bullet', 2, 10)
-  graphics.destroy()
+window.game = new Phaser.Game(config)
+
+// Audio helpers on the Scene prototype
+GameScene.prototype.ensureAudio = function () {
+  if (!this.audioCtx) {
+    const Ctx = window.AudioContext || window.webkitAudioContext
+    this.audioCtx = Ctx ? new Ctx() : null
+  }
+  if (this.audioCtx?.state === 'suspended') {
+    this.audioCtx.resume().catch(() => {})
+  }
 }
 
-const game = new Phaser.Game(config)
-game.events.on('ready', () => {
-  createBulletTexture(game)
-})
+GameScene.prototype.playBeep = function (freq = 440, duration = 0.05, type = 'square', gainValue = 0.03) {
+  try {
+    this.ensureAudio()
+    if (!this.audioCtx) return
+    const ctx = this.audioCtx
+    const osc = ctx.createOscillator()
+    const gain = ctx.createGain()
+    osc.type = type
+    osc.frequency.setValueAtTime(freq, ctx.currentTime)
+    gain.gain.setValueAtTime(gainValue, ctx.currentTime)
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + duration)
+    osc.connect(gain).connect(ctx.destination)
+    osc.start()
+    osc.stop(ctx.currentTime + duration)
+  } catch (e) {
+    // ignore audio errors (e.g., autoplay restrictions)
+  }
+}
+
+GameScene.prototype.collectPowerUp = function (player, powerUp) {
+  const type = powerUp.getData('type')
+  powerUp.destroy()
+  if (type === 'rapid') {
+    this.shootCooldown = 80
+    this.autoFireUntil = this.time.now + 5000
+    this.playBeep(900, 0.08, 'square', 0.04)
+  }
+}
