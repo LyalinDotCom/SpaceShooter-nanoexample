@@ -233,15 +233,8 @@ class GameScene extends Phaser.Scene {
 
     // Check for next wave with better logic
     if (activeEnemies === 0 && !this.isSpawning && !this.gameOver) {
-      // Prepare and lock spawning for next wave
-      this.isSpawning = true
-      this.wave++
-      this.waveText.setText('Wave: ' + this.wave)
-      console.log(`Preparing wave ${this.wave}`)
-      if (this.nextWaveTimer) this.nextWaveTimer.remove(false)
-      this.nextWaveTimer = this.time.delayedCall(1000, () => {
-        this.startWave()
-      })
+      // Prepare and lock spawning for next wave using helper
+      this.startNextWave(1000)
     }
 
     // Spawn watchdog: if flagged spawning but no enemies appear in time, restart the wave
@@ -251,7 +244,7 @@ class GameScene extends Phaser.Scene {
         console.warn('Spawn watchdog restarting wave')
         this.isSpawning = false
         this.spawnWatchStart = null
-        this.startWave()
+        this.startNextWave(0)
       }
     } else {
       this.spawnWatchStart = null
@@ -499,6 +492,21 @@ class GameScene extends Phaser.Scene {
       if (!this.spawnTimerEvent) {
         this.isSpawning = false
       }
+    }
+  }
+
+  // Helper: advance wave counter and start wave, with optional delay
+  startNextWave (delayMs = 1000) {
+    // Increment wave and update UI immediately so indicator reflects reality
+    this.isSpawning = true
+    this.wave++
+    this.waveText.setText('Wave: ' + this.wave)
+    console.log(`Preparing wave ${this.wave}`)
+    if (this.nextWaveTimer) this.nextWaveTimer.remove(false)
+    if (delayMs > 0) {
+      this.nextWaveTimer = this.time.delayedCall(delayMs, () => this.startWave())
+    } else {
+      this.startWave()
     }
   }
 }
