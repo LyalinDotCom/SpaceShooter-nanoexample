@@ -16,6 +16,13 @@ Recent Fixes
 - Larger hitboxes: bullet bodies enlarged to 8×20; enemy colliders to ~90% of display for more forgiving hits.
 - Temporary: power-up drops disabled to eliminate confusing green dot.
 
+Enemy Fire Tuning
+
+- Global fire controls added in-scene (`fireConfig`):
+  - `minGateMs`, `perEnemyChance` for regular shots.
+  - Coordinated volleys with `volley.enabled`, `minDelayMs`/`maxDelayMs`, `fireAll|fraction`, and optional aiming towards the player.
+  - Methods: `scheduleNextVolley()`, `coordinatedVolley()`.
+
 Gameplay Loop
 
 - Assets preload: backgrounds (1–5), player, 20 enemy sprites (`src/game.js:73`).

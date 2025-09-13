@@ -83,6 +83,26 @@ class GameScene extends Phaser.Scene {
     this.nextWaveTimer = null
     this.spawnWatchStart = null
     this.spawnTimerEvent = null
+
+    // Enemy fire tuning (global control)
+    this.fireConfig = {
+      // Minimum time between individual-fire checks (ms)
+      minGateMs: 800,
+      // Chance per active enemy to fire when gate opens (0..1)
+      perEnemyChance: 0.2,
+      // Coordinated volleys
+      volley: {
+        enabled: true,
+        minDelayMs: 2500,
+        maxDelayMs: 5000,
+        fireAll: true, // if false, uses fraction below
+        fraction: 0.6,
+        aimed: true, // aim towards player
+        speed: 240
+      }
+    }
+    this.nextFireGateAt = 0
+    this.nextVolleyAt = 0
   }
 
   preload () {
@@ -169,6 +189,9 @@ class GameScene extends Phaser.Scene {
     this.debugText.setVisible(this.debugEnabled)
 
     // Start first wave
+    // Initialize fire timers
+    this.nextFireGateAt = this.time.now + this.fireConfig.minGateMs
+    this.scheduleNextVolley()
     this.startWave()
   }
 
@@ -195,7 +218,6 @@ class GameScene extends Phaser.Scene {
     }
 
     // Enemy movement and firing
-    this.enemyFireTimer++
     this.enemies.children.each(enemy => {
       if (enemy.active) {
         if (enemy.y > 300) {
@@ -214,16 +236,28 @@ class GameScene extends Phaser.Scene {
         } else if (Math.abs(enemy.body.velocity.x) < 20) {
           enemy.body.velocity.x = Phaser.Math.Between(40, 80) * (Phaser.Math.Between(0, 1) ? 1 : -1)
         }
-
-        // Reduced firing rate - fire every 2-3 seconds (120-180 frames at 60fps)
-        if (this.enemyFireTimer > 120 && Phaser.Math.Between(0, 100) > 98) {
-          this.fireEnemyBullet(enemy.x, enemy.y)
-          if (Phaser.Math.Between(0, 100) > 50) {
-            this.enemyFireTimer = 0 // Reset timer after some enemies fire
-          }
-        }
       }
     })
+
+    // Global, time-based fire gate for individual enemy shots
+    const now = this.time.now
+    if (now >= this.nextFireGateAt) {
+      const chance = this.fireConfig.perEnemyChance
+      this.enemies.children.each(enemy => {
+        if (enemy.active && Math.random() < chance) {
+          // Slight random horizontal lead
+          const vx = Phaser.Math.Between(-40, 40)
+          this.fireEnemyBullet(enemy.x, enemy.y, vx, 220)
+        }
+      })
+      this.nextFireGateAt = now + this.fireConfig.minGateMs
+    }
+
+    // Coordinated volleys
+    if (this.fireConfig.volley.enabled && now >= this.nextVolleyAt) {
+      this.coordinatedVolley()
+      this.scheduleNextVolley()
+    }
 
     // Update debug info
     const activeEnemies = this.enemies.countActive(true)
@@ -288,7 +322,7 @@ class GameScene extends Phaser.Scene {
     this.playBeep(700, 0.05, 'square', 0.03)
   }
 
-  fireEnemyBullet (x, y) {
+  fireEnemyBullet (x, y, vx = 0, vy = 200) {
     const bx = x
     const by = y + 20
     const bullet = this.enemyBullets.get(bx, by, 'bullet')
@@ -299,11 +333,11 @@ class GameScene extends Phaser.Scene {
       bullet.body.enable = true
       bullet.body.reset(bx, by)
       bullet.body.setAllowGravity(false)
-      bullet.body.setVelocity(0, 200)
+      bullet.body.setVelocity(vx, vy)
       if (bullet.body.setSize) bullet.body.setSize(10, 26, true)
     } else {
       bullet.setPosition(bx, by)
-      bullet.setVelocity(0, 200)
+      bullet.setVelocity(vx, vy)
     }
   }
 
@@ -493,6 +527,39 @@ class GameScene extends Phaser.Scene {
         this.isSpawning = false
       }
     }
+  }
+
+  // Helper: schedule next coordinated volley
+  scheduleNextVolley () {
+    const { minDelayMs, maxDelayMs } = this.fireConfig.volley
+    this.nextVolleyAt = this.time.now + Phaser.Math.Between(minDelayMs, maxDelayMs)
+  }
+
+  // Fire a coordinated volley from all or a fraction of active enemies
+  coordinatedVolley () {
+    const active = []
+    this.enemies.children.each(e => { if (e.active) active.push(e) })
+    if (active.length === 0) return
+
+    let shooters = active
+    const { fireAll, fraction, aimed, speed } = this.fireConfig.volley
+    if (!fireAll) {
+      const count = Math.max(1, Math.floor(active.length * fraction))
+      shooters = Phaser.Utils.Array.Shuffle(active.slice()).slice(0, count)
+    }
+
+    shooters.forEach(e => {
+      if (aimed && this.player?.active) {
+        const dx = this.player.x - e.x
+        const dy = Math.max(1, this.player.y - e.y)
+        const len = Math.sqrt(dx * dx + dy * dy) || 1
+        const vx = (dx / len) * speed
+        const vy = (dy / len) * speed
+        this.fireEnemyBullet(e.x, e.y, vx, vy)
+      } else {
+        this.fireEnemyBullet(e.x, e.y)
+      }
+    })
   }
 
   // Helper: advance wave counter and start wave, with optional delay
